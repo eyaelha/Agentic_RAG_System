@@ -1,59 +1,47 @@
-Agentic RAG System — Apple 10-K Filings
+# Agentic RAG System — Apple 10-K Filings
 
-Un système agentique de Retrieval-Augmented Generation (RAG) construit avec LangGraph, capable de répondre à des questions sur les rapports annuels d'Apple Inc. (10-K) pour les exercices fiscaux 2021–2025, sourcés directement depuis SEC EDGAR.
+An agentic Retrieval-Augmented Generation (RAG) system, built with **LangGraph**, that answers questions about Apple Inc.'s annual reports (10-K filings) for fiscal years 2021–2025, sourced directly from SEC EDGAR.
 
+## How it works
 
-🧭 Comment ça fonctionne
+**Document base.** The five most recent Apple 10-K filings are downloaded automatically from SEC EDGAR's public API (`data.sec.gov`, no key required). Hidden iXBRL metadata is stripped from the HTML before text extraction. Each filing is split by its "Item" section headers (Business, Risk Factors, MD&A, etc.), and any section still too long is further split into fixed-size chunks (1500 characters, 200 overlap). This produces 1073 chunks, each tagged with its filing year and section name.
 
-1. Ingestion des documents
+**Embeddings and storage.** Chunks are embedded locally with `sentence-transformers` (`all-mpnet-base-v2`), not the Gemini embeddings API, after that API's free-tier daily quota was exhausted during development, and stored in a local Chroma vector store.
 
+**Tools.** Two tools are exposed to the agent:
+- `retrieve_10k`: semantic search over the vector store, with optional filters by filing year and/or section.
+- `calculator`: evaluates numeric expressions with `numexpr` (not Python's `eval`, for safety).
 
-Les cinq derniers dépôts 10-K d'Apple sont téléchargés automatiquement depuis l'API publique de SEC EDGAR (data.sec.gov, aucune clé API requise).
-Les métadonnées iXBRL cachées sont supprimées du HTML avant l'extraction du texte.
-Chaque dépôt est découpé selon ses sections "Item" (Business, Risk Factors, MD&A, etc.).
-Les sections encore trop longues sont ensuite subdivisées en chunks de taille fixe (1 500 caractères, avec chevauchement de 200 caractères).
-Ce pipeline produit 1 073 chunks, chacun étiqueté avec son année de dépôt et le nom de sa section.
+**Graph (LangGraph).** A ReAct-style loop: an `agent` node (Gemini with tools bound) decides whether to answer or call a tool; a `tools` node executes tool calls; a conditional edge loops the agent back until it produces a final answer. State is the running message list; conversation memory is handled by an `InMemorySaver` checkpointer keyed by session (`thread_id`).
 
+**LLM.** Gemini 2.5 Flash via `langchain-google-genai`. Free-tier quota (20 requests/day) proved insufficient for evaluation; billing was enabled on the Google Cloud project.
 
-2. Embeddings et stockage
+**Evaluation.** 20 questions (10 simple, 10 complex) run through the agent. For each: response time, retrieved chunks, and final answer are logged. A separate LLM-as-judge pass (Gemini, temperature 0) scores retrieval relevance and answer quality (Pass/Fail), with results manually reviewed afterward. Summary: 65% retrieval pass rate, 60% answer pass rate, 9.2s average response time overall.
 
+## Requirements
 
-Les chunks sont vectorisés localement avec sentence-transformers (all-mpnet-base-v2) — plutôt que via l'API d'embeddings Gemini, dont le quota gratuit quotidien a été épuisé pendant le développement.
-Les vecteurs sont stockés dans une base Chroma locale.
+Python 3.12 (developed on Google Colab). Install with:
 
+```bash
+pip install langgraph langchain-google-genai langchain-community langchain-chroma \
+            langchain-text-splitters langchain-huggingface[full] \
+            requests beautifulsoup4 html2text numexpr
+```
 
-3. Outils (Tools)
+You also need:
+- A **Google AI (Gemini) API key**, set as the `GOOGLE_API_KEY` environment variable.
+- **Billing enabled** on the associated Google Cloud project — the free tier's daily request quota is too low to run the full evaluation.
 
-Deux outils sont exposés à l'agent :
+## Repository contents
 
-OutilDescriptionretrieve_10kRecherche sémantique dans la base vectorielle, avec filtres optionnels par année de dépôt et/ou section.calculatorÉvalue des expressions numériques via numexpr (plutôt que eval de Python, pour des raisons de sécurité).
+| File | Description |
+|---|---|
+| `Agentic_RAG_System___Apple_10_K_Filings_.ipynb` | Full notebook: data pipeline, agent, graph, evaluation |
+| `evaluation_results.json` | Raw evaluation results (20 questions, tool calls, judge verdicts) |
 
-4. Graphe (LangGraph)
+## Known limitations
 
-Une boucle de type ReAct :
+- Content appearing before the first "Item" header in each filing (e.g., cover page details) is not indexed — a chunking gap, not a retrieval-ranking issue.
+- The agent occasionally invents plausible-but-unverified figures when the exact requested metric isn't a labeled line in the source document.
+- The evaluation judge shares a model family with the agent it evaluates; manual review found no systematic bias, but this remains a methodological caveat.
 
-
-Un nœud agent (Gemini avec outils liés) décide de répondre directement ou d'appeler un outil.
-Un nœud tools exécute les appels d'outils.
-Une arête conditionnelle renvoie le contrôle à l'agent jusqu'à production d'une réponse finale.
-L'état est maintenu sous forme de liste de messages, avec une mémoire de conversation gérée par un checkpointer InMemorySaver indexé par session (thread_id).
-
-
-5. LLM
-
-
-Gemini 2.5 Flash, utilisé via langchain-google-genai.
-Le quota gratuit (20 requêtes/jour) s'étant révélé insuffisant pour l'évaluation, la facturation a été activée sur le projet Google Cloud associé.
-
-
-
-📦 Stack technique
-
-
-LangGraph — orchestration de l'agent
-LangChain (google-genai) — intégration LLM
-Gemini 2.5 Flash — modèle de langage
-Sentence-Transformers (all-mpnet-base-v2) — embeddings
-Chroma — base de données vectorielle
-NumExpr — calculs numériques sécurisés
-SEC EDGAR API — source des données
